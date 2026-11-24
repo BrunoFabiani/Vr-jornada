@@ -1,0 +1,157 @@
+﻿<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <!-- 1. Documento e biblioteca -->
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lançamento de bolinhas em VR</title>
+    <script src="https://aframe.io/releases/1.8.0/aframe.min.js"></script>
+
+    <script>
+      // 2. Componente: configurações e entradas de controle, olhar e teclado.
+      AFRAME.registerComponent('lancador', {
+        schema: {
+          velocidade: { default: 8 }, // Metros por segundo.
+          gravidade: { default: 9.8 },
+          duracao: { default: 3 } // Tempo de vida de cada bola, em segundos.
+        },
+
+        init() {
+          this.bolas = [];
+          this.alvo = this.el.sceneEl.querySelector('.alvo');
+          this.mao = this.el.sceneEl.querySelector('#mao');
+          this.olhar = this.el.sceneEl.querySelector('#olhar');
+          this.camera = this.el.sceneEl.querySelector('#cam');
+          this.controleConectado = false;
+
+          // A e B: tanto o gatilho quanto o olhar geram click sobre o alvo.
+          this.aoClicar = (evento) => {
+            const { cursorEl, intersection } = evento.detail || {};
+            if (!cursorEl || !intersection) return;
+            if (cursorEl === this.olhar && this.controleConectado) return;
+
+            // No olhar, a bola nasce na câmera; no controle, nasce na mão.
+            const emissor = cursorEl === this.olhar ? this.camera : cursorEl;
+            const origem = emissor.object3D.getWorldPosition(new THREE.Vector3());
+            this.lancar(origem, intersection.point);
+          };
+
+          // Evita disparos automáticos pelo olhar enquanto se usa o controle.
+          this.aoConectar = () => this.configurarOlhar(false);
+          this.aoDesconectar = () => this.configurarOlhar(true);
+
+          // C: espaço dispara na direção da câmera para testar no computador.
+          this.aoTeclar = (evento) => {
+            if (evento.code !== 'Space') return;
+            const elemento = evento.target;
+            if (elemento && (elemento.isContentEditable ||
+                ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(elemento.tagName))) return;
+            evento.preventDefault();
+            if (evento.repeat) return;
+
+            const camera3D = this.camera.getObject3D('camera');
+            const origem = camera3D.getWorldPosition(new THREE.Vector3());
+            const direcao = camera3D.getWorldDirection(new THREE.Vector3());
+            this.lancar(origem, origem.clone().add(direcao));
+          };
+
+          this.alvo.addEventListener('click', this.aoClicar);
+          this.mao.addEventListener('controllerconnected', this.aoConectar);
+          this.mao.addEventListener('controllerdisconnected', this.aoDesconectar);
+          window.addEventListener('keydown', this.aoTeclar);
+        },
+
+        configurarOlhar(ativo) {
+          this.controleConectado = !ativo;
+          this.olhar.setAttribute('raycaster', 'enabled', ativo);
+          this.olhar.setAttribute('cursor', 'fuse', ativo);
+          this.olhar.setAttribute('visible', ativo);
+        },
+
+        // 3. Criação da bola e cálculo da velocidade inicial.
+        lancar(origem, destino) {
+          const velocidade = destino.clone().sub(origem);
+          if (velocidade.lengthSq() === 0) return;
+          velocidade.normalize().multiplyScalar(this.data.velocidade);
+
+          const bola = document.createElement('a-sphere');
+          bola.setAttribute('radius', 0.08);
+          bola.setAttribute('color', '#2E2640');
+          this.el.sceneEl.appendChild(bola);
+          bola.object3D.position.copy(origem);
+          this.bolas.push({ bola, velocidade, vida: this.data.duracao });
+        },
+
+        // 4. Simulação: gravidade, deslocamento e expiração das bolas.
+        // É um lançamento simples: não há colisão com o alvo nem com o chão.
+        tick(tempo, intervalo) {
+          if (!intervalo) return;
+          const segundos = intervalo / 1000;
+
+          for (const b of this.bolas) {
+            const passo = Math.min(segundos, b.vida);
+            b.bola.object3D.position.addScaledVector(b.velocidade, passo);
+            b.bola.object3D.position.y -= 0.5 * this.data.gravidade * passo * passo;
+            b.velocidade.y -= this.data.gravidade * passo;
+            b.vida -= segundos;
+            if (b.vida <= 0) b.bola.remove();
+          }
+
+          this.bolas = this.bolas.filter((b) => b.vida > 0);
+        },
+
+        // 5. Limpeza ao remover o componente ou a cena.
+        remove() {
+          this.alvo.removeEventListener('click', this.aoClicar);
+          this.mao.removeEventListener('controllerconnected', this.aoConectar);
+          this.mao.removeEventListener('controllerdisconnected', this.aoDesconectar);
+          window.removeEventListener('keydown', this.aoTeclar);
+          for (const b of this.bolas) b.bola.remove();
+          this.bolas = [];
+        }
+      });
+    </script>
+  </head>
+
+  <body>
+    <a-scene background="color: #ECEFF8">
+      <!-- 6. Controle direito Oculus/Meta: apontar para o alvo e apertar o gatilho. -->
+      <a-entity
+        id="mao"
+        laser-controls="hand: right"
+        raycaster="objects: .alvo"
+      ></a-entity>
+
+      <!-- 7. Câmera e olhar: mirar no alvo por 1,5 s quando não há controle. -->
+      <a-camera id="cam" position="0 1.6 0">
+        <a-entity
+          id="olhar"
+          position="0 0 -1"
+          cursor="fuse: true; fuseTimeout: 1500"
+          raycaster="objects: .alvo"
+          geometry="primitive: ring; radiusInner: 0.02; radiusOuter: 0.03"
+          material="color: #2E2640; shader: flat"
+        ></a-entity>
+      </a-camera>
+
+      <!-- 8. Ambiente, alvo e instruções visíveis dentro do headset. -->
+      <a-plane
+        rotation="-90 0 0"
+        width="20"
+        height="20"
+        color="#C9D6C5"
+      ></a-plane>
+      <a-box class="alvo" position="0 1.6 -4" color="#90A5E5"></a-box>
+      <a-text
+        value="Mire no cubo e aperte o gatilho.\nSem controle: mire por 1,5 s.\nNo PC: use a barra de espaco."
+        position="0 3 -4"
+        align="center"
+        color="#2E2640"
+        width="4"
+      ></a-text>
+
+      <!-- 9. Ativa o componente após a declaração das entidades usadas por ele. -->
+      <a-entity lancador="velocidade: 8; gravidade: 9.8; duracao: 3"></a-entity>
+    </a-scene>
+  </body>
+</html>
